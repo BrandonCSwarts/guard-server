@@ -3,15 +3,15 @@ import express from 'express';
 import morgan from 'morgan';
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
 app.use(morgan('combined'));
+
+// Accept raw text bodies only
+app.use(express.text({ type: '*/*' }));
 
 // Health check
 app.get('/health', (req, res) => res.status(200).send({ status: 'ok' }));
 
-// Accept raw text bodies
-app.use(express.text({ type: '*/*' }));
-
+// Events endpoint
 app.post('/api/events', (req, res) => {
   const rawMessage = req.body; // e.g. "00240498861345"
 
@@ -21,10 +21,8 @@ app.post('/api/events', (req, res) => {
 
   console.log('RAW EVENT:', rawMessage);
 
-  // Later you can save rawMessage to a database or file
   return res.status(200).json({ status: 'ok' });
 });
 
-
-const PORT = process.env.PORT || 10000; // Render assigns PORT
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
