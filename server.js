@@ -9,25 +9,22 @@ app.use(morgan('combined'));
 // Health check
 app.get('/health', (req, res) => res.status(200).send({ status: 'ok' }));
 
-// Events endpoint — matches API_PATH "/api/events"
+// Accept raw text bodies
+app.use(express.text({ type: '*/*' }));
+
 app.post('/api/events', (req, res) => {
-  const event = req.body;
-  if (!event || typeof event !== 'object') {
-    return res.status(400).json({ status: 'error', message: 'Invalid JSON' });
+  const rawMessage = req.body; // e.g. "00240498861345"
+
+  if (!rawMessage || typeof rawMessage !== 'string') {
+    return res.status(400).json({ status: 'error', message: 'No raw string received' });
   }
 
-  // Basic validation
-  const { event_code, timestamp, device_id } = event;
-  if (!event_code || !timestamp || !device_id) {
-    return res.status(422).json({ status: 'error', message: 'Missing required fields' });
-  }
+  console.log('RAW EVENT:', rawMessage);
 
-  // For now, log to console (Render captures logs)
-  console.log('EVENT:', JSON.stringify(event));
-
-  // TODO: Save to DB later
+  // Later you can save rawMessage to a database or file
   return res.status(200).json({ status: 'ok' });
 });
+
 
 const PORT = process.env.PORT || 10000; // Render assigns PORT
 app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
