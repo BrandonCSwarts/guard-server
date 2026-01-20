@@ -7,7 +7,7 @@ const app = express();
 
 // 1. Broad CORS configuration
 app.use(cors({
-  origin: '*', // For production, replace with your actual frontend URL
+  origin: '*',
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type']
 }));
@@ -19,17 +19,36 @@ const events = [];
 const MAX_EVENTS = 1000;
 const clients = new Set();
 
+// Helper to notify all dashboards of system changes (like connection counts)
+const broadcastStatus = () => {
+  const statusUpdate = JSON.stringify({ 
+    type: 'SYSTEM_STATUS', 
+    count: clients.size 
+  });
+  for (const client of clients) {
+    try {
+      client.write(`data: ${statusUpdate}\n\n`);
+      if (typeof client.flush === 'function') client.flush();
+    } catch (err) {
+      clients.delete(client);
+    }
+  }
+};
+
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 app.post('/api/events', (req, res) => {
-  const rawMessage = (req.body || '').trim();
-  if (!rawMessage || typeof rawMessage !== 'string') {
+  // Trim and handle potential null bodies
+  const rawMessage = (req.body || '').toString().trim();
+  
+  if (!rawMessage) {
     return res.status(400).json({ status: 'error', message: 'No raw string received' });
   }
 
-  console.log('RAW EVENT RECEIVED:', rawMessage);
+  console.log(`RAW EVENT RECEIVED: "${rawMessage}" | Broadcasting to ${clients.size} clients`);
 
   let parsed = null;
+  // Regex check for exactly 10 digits
   if (/^\d{10}$/.test(rawMessage)) {
     const siteId = rawMessage.substring(0, 4);
     const msgCode = rawMessage.substring(4, 6);
@@ -70,9 +89,13 @@ app.post('/api/events', (req, res) => {
   if (events.length > MAX_EVENTS) events.pop();
 
   const eventJson = JSON.stringify(eventObject);
+  
+  // Broadcast to all connected SSE clients
   for (const client of clients) {
     try {
       client.write(`data: ${eventJson}\n\n`);
+      // Force the message out the door immediately
+      if (typeof client.flush === 'function') client.flush();
     } catch (err) {
       clients.delete(client);
     }
@@ -82,32 +105,36 @@ app.post('/api/events', (req, res) => {
 });
 
 app.get('/api/events/stream', (req, res) => {
-  // 2. Extra explicit headers for SSE stability on Render
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-  res.setHeader('Access-Control-Allow-Origin', '*'); // Forces CORS for the stream
+  res.setHeader('Access-Control-Allow-Origin', '*'); 
   
   res.flushHeaders();
 
-  // Keep-alive/Welcome
-  const welcomeData = JSON.stringify({ message: 'Connected' });
+  // Welcome message
+  const welcomeData = JSON.stringify({ message: 'Connected', type: 'SYSTEM_WELCOME' });
   res.write(`data: ${welcomeData}\n\n`);
+  if (typeof res.flush === 'function') res.flush();
 
   clients.add(res);
   console.log(`Client connected. Total: ${clients.size}`);
+  
+  // Trigger a status update to show the new count on the dashboard
+  broadcastStatus();
 
   const heartbeat = setInterval(() => {
-    // Standard SSE comment format for heartbeat (starts with :)
     if (res.writableEnded) return;
     res.write(': heartbeat\n\n');
+    if (typeof res.flush === 'function') res.flush();
   }, 15000);
 
   req.on('close', () => {
     clearInterval(heartbeat);
     clients.delete(res);
     console.log('Client disconnected');
+    broadcastStatus(); // Update count for remaining clients
   });
 });
 
