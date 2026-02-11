@@ -35,19 +35,16 @@ const broadcastStatus = () => {
   }
 };
 
-app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-
-app.post('/api/events', (req, res) => {
-  // Trim and handle potential null bodies
-  const rawMessage = (req.body || '').toString().trim();
-  
-  if (!rawMessage) {
-    return res.status(400).json({ status: 'error', message: 'No raw string received' });
-  }
-
-  console.log(`RAW EVENT RECEIVED: "${rawMessage}" | Broadcasting to ${clients.size} clients`);
+/**
+ * Common logic: parse message, store event, broadcast to SSE clients
+ * @param {string} rawMessage 
+ * @param {string} source - 'hookdeck', 'direct', etc.
+ */
+function processIncomingMessage(rawMessage, source = 'unknown') {
+  console.log(`[${source.toUpperCase()}] Received: "${rawMessage}"`);
 
   let parsed = null;
+
   // Regex check for exactly 10 digits
   if (/^\d{10}$/.test(rawMessage)) {
     const siteId = rawMessage.substring(0, 4);
@@ -82,26 +79,69 @@ app.post('/api/events', (req, res) => {
     event: rawMessage,
     timestamp: Date.now(),
     parsed,
-    isValid: !!parsed
+    isValid: !!parsed,
+    source,           // ← helps debugging & future analytics
   };
 
   events.unshift(eventObject);
   if (events.length > MAX_EVENTS) events.pop();
 
   const eventJson = JSON.stringify(eventObject);
-  
+
   // Broadcast to all connected SSE clients
   for (const client of clients) {
     try {
       client.write(`data: ${eventJson}\n\n`);
-      // Force the message out the door immediately
       if (typeof client.flush === 'function') client.flush();
     } catch (err) {
       clients.delete(client);
     }
   }
+}
 
+app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// ────────────────────────────────────────────────
+//  Deprecated legacy endpoint – still works but logs warning
+// ────────────────────────────────────────────────
+app.post('/api/events', (req, res) => {
+  console.warn('Warning: Using deprecated endpoint /api/events – please update to /hookdeck or /direct');
+  const rawMessage = (req.body || '').toString().trim();
+  
+  if (!rawMessage) {
+    return res.status(400).json({ status: 'error', message: 'No raw string received' });
+  }
+
+  processIncomingMessage(rawMessage, 'legacy');
   res.status(200).json({ status: 'ok' });
+});
+
+// ────────────────────────────────────────────────
+//  For SIM800L → Hookdeck → server
+// ────────────────────────────────────────────────
+app.post('/api/events/hookdeck', (req, res) => {
+  const rawMessage = (req.body || '').toString().trim();
+
+  if (!rawMessage) {
+    return res.status(400).json({ error: 'No message received' });
+  }
+
+  processIncomingMessage(rawMessage, 'hookdeck');
+  res.status(200).json({ status: 'received' });
+});
+
+// ────────────────────────────────────────────────
+//  For A7670E → direct to server
+// ────────────────────────────────────────────────
+app.post('/api/events/direct', (req, res) => {
+  const rawMessage = (req.body || '').toString().trim();
+
+  if (!rawMessage) {
+    return res.status(400).json({ error: 'No message received' });
+  }
+
+  processIncomingMessage(rawMessage, 'direct');
+  res.status(200).json({ status: 'received' });
 });
 
 app.get('/api/events/stream', (req, res) => {
@@ -121,7 +161,7 @@ app.get('/api/events/stream', (req, res) => {
   clients.add(res);
   console.log(`Client connected. Total: ${clients.size}`);
   
-  // Trigger a status update to show the new count on the dashboard
+  // Trigger a status update
   broadcastStatus();
 
   const heartbeat = setInterval(() => {
@@ -134,7 +174,7 @@ app.get('/api/events/stream', (req, res) => {
     clearInterval(heartbeat);
     clients.delete(res);
     console.log('Client disconnected');
-    broadcastStatus(); // Update count for remaining clients
+    broadcastStatus();
   });
 });
 
